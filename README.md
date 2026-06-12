@@ -20,7 +20,7 @@ This extension estimates token counts using a heuristic (~4 characters per token
 
 1. Clone or download this repository
    ```bash
-   git clone https://github.com/Sandeep0900/ai-token-meter.git
+   git clone https://github.com/<your-username>/ai-token-meter.git
    ```
 2. Open Chrome and go to `chrome://extensions`
 3. Enable **Developer mode** (top-right toggle)

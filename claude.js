@@ -58,28 +58,69 @@
   }
 
   function getConversationText() {
-    // Claude.ai conversation turns typically use [data-testid="user-turn"] and message containers
-    const turns = document.querySelectorAll(
-      '[data-testid="user-turn"], [data-testid="message-content"], .font-claude-message, .font-user-message'
-    );
+    // Try multiple known/likely selectors for Claude.ai message turns,
+    // since the DOM structure changes between releases.
+    const selectors = [
+      '[data-testid="user-message"]',
+      '[data-testid="user-turn"]',
+      '[data-testid="message-content"]',
+      '.font-claude-message',
+      '.font-user-message',
+      'div[data-test-render-count]' // generic message wrapper seen in some builds
+    ];
+
+    let turns = [];
+    for (const sel of selectors) {
+      const found = document.querySelectorAll(sel);
+      if (found.length > 0) {
+        turns = Array.from(found);
+        break;
+      }
+    }
+
     let text = "";
+
     if (turns.length > 0) {
       turns.forEach((t) => (text += t.innerText + "\n"));
-    } else {
-      // Fallback: grab main chat container
-      const main = document.querySelector("main");
-      if (main) text = main.innerText;
     }
+
+    // Fallback / supplement: if nothing matched or text is suspiciously empty,
+    // grab the main conversation column directly.
+    if (text.trim().length === 0) {
+      const main =
+        document.querySelector('main [class*="conversation"]') ||
+        document.querySelector("main") ||
+        document.body;
+      if (main) text = main.innerText;
+      turns = []; // can't get a reliable count in fallback mode
+    }
+
     return { text, count: turns.length };
   }
 
   function getModelLimit() {
-    // Try to detect model name from UI; default fallback
-    const modelEl = document.querySelector('[data-testid="model-selector-dropdown"]');
-    let modelName = "Default";
-    if (modelEl) modelName = modelEl.textContent.trim();
+    // Try multiple selectors to detect the model name from the UI
+    const selectors = [
+      '[data-testid="model-selector-dropdown"]',
+      'button[data-testid*="model"]',
+      '[aria-haspopup="menu"][class*="model"]'
+    ];
+
+    let modelName = "";
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.textContent.trim()) {
+        modelName = el.textContent.trim();
+        break;
+      }
+    }
+
     for (const key of Object.keys(MODEL_LIMITS)) {
-      if (modelName.includes(key.split(" ")[1])) return { limit: MODEL_LIMITS[key], name: key };
+      if (key === "Default") continue;
+      const shortName = key.split(" ").slice(1).join(" "); // e.g. "Sonnet 4.6"
+      if (modelName.includes(shortName) || modelName.includes(shortName.split(" ")[0])) {
+        return { limit: MODEL_LIMITS[key], name: key };
+      }
     }
     return { limit: MODEL_LIMITS["Default"], name: modelName || "Claude" };
   }
@@ -96,12 +137,14 @@
     usedEl.textContent = tokens.toLocaleString();
     limitEl.textContent = limit.toLocaleString();
     pctEl.textContent = pct.toFixed(1) + "%";
-    msgCountEl.textContent = `${count} elements`;
+    msgCountEl.textContent = count > 0 ? `${count} messages` : "—";
     fillEl.style.width = pct + "%";
 
     fillEl.classList.remove("warn", "danger");
     if (pct > 85) fillEl.classList.add("danger");
     else if (pct > 60) fillEl.classList.add("warn");
+
+    console.debug("[AI Token Meter] tokens:", tokens, "| chars:", text.length, "| turns:", count);
   }
 
   // Initial setup
