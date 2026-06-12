@@ -58,15 +58,16 @@
   }
 
   function getConversationText() {
-    // Try multiple known/likely selectors for Claude.ai message turns,
-    // since the DOM structure changes between releases.
+    // Claude.ai only keeps the currently-visible turns in the DOM
+    // (virtualized scrolling), so this reflects visible/recent context,
+    // not the full conversation history.
     const selectors = [
       '[data-testid="user-message"]',
       '[data-testid="user-turn"]',
       '[data-testid="message-content"]',
       '.font-claude-message',
       '.font-user-message',
-      'div[data-test-render-count]' // generic message wrapper seen in some builds
+      'div[data-test-render-count]'
     ];
 
     let turns = [];
@@ -84,22 +85,19 @@
       turns.forEach((t) => (text += t.innerText + "\n"));
     }
 
-    // Fallback / supplement: if nothing matched or text is suspiciously empty,
-    // grab the main conversation column directly.
     if (text.trim().length === 0) {
       const main =
         document.querySelector('main [class*="conversation"]') ||
         document.querySelector("main") ||
         document.body;
       if (main) text = main.innerText;
-      turns = []; // can't get a reliable count in fallback mode
+      turns = [];
     }
 
     return { text, count: turns.length };
   }
 
   function getModelLimit() {
-    // Try multiple selectors to detect the model name from the UI
     const selectors = [
       '[data-testid="model-selector-dropdown"]',
       'button[data-testid*="model"]',
@@ -117,7 +115,7 @@
 
     for (const key of Object.keys(MODEL_LIMITS)) {
       if (key === "Default") continue;
-      const shortName = key.split(" ").slice(1).join(" "); // e.g. "Sonnet 4.6"
+      const shortName = key.split(" ").slice(1).join(" ");
       if (modelName.includes(shortName) || modelName.includes(shortName.split(" ")[0])) {
         return { limit: MODEL_LIMITS[key], name: key };
       }
@@ -147,17 +145,14 @@
     console.debug("[AI Token Meter] tokens:", tokens, "| chars:", text.length, "| turns:", count);
   }
 
-  // Initial setup
   createWidget();
   updateUsage();
 
-  // Observe DOM changes to update live
   const observer = new MutationObserver(() => {
     clearTimeout(window.__attDebounce);
     window.__attDebounce = setTimeout(updateUsage, 600);
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  // Periodic refresh as fallback
   setInterval(updateUsage, 5000);
 })();
