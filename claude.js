@@ -9,6 +9,20 @@
   let widget, fillEl, usedEl, limitEl, pctEl, msgCountEl;
   let collapsed = false;
 
+  // Track the highest token count seen across scroll positions,
+  // and accumulate per-message token counts so scrolling away
+  // doesn't make the total drop.
+  let seenMessageTokens = new Map(); // key: message text hash -> token count
+  let runningTotal = 0;
+
+  function hashText(text) {
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) {
+      hash = (hash * 31 + text.charCodeAt(i)) | 0;
+    }
+    return hash;
+  }
+
   function createWidget() {
     if (document.getElementById("ai-token-tracker-widget")) return;
 
@@ -23,7 +37,7 @@
         <span class="att-toggle">▾</span>
       </div>
       <div class="att-body">
-        <div class="att-row"><span>Estimated tokens</span><span class="att-value" id="att-used">0</span></div>
+        <div class="att-row"><span>Total estimated tokens</span><span class="att-value" id="att-used">0</span></div>
         <div class="att-row"><span>Context limit</span><span class="att-value" id="att-limit">200,000</span></div>
         <div class="att-bar-container"><div class="att-bar-fill" id="att-fill" style="width:0%"></div></div>
         <div class="att-row"><span id="att-pct">0%</span><span id="att-msgcount">0 messages</span></div>
@@ -57,10 +71,7 @@
     updateUsage();
   }
 
-  function getConversationText() {
-    // Claude.ai only keeps the currently-visible turns in the DOM
-    // (virtualized scrolling), so this reflects visible/recent context,
-    // not the full conversation history.
+  function getVisibleMessages() {
     const selectors = [
       '[data-testid="user-message"]',
       '[data-testid="user-turn"]',
@@ -70,31 +81,11 @@
       'div[data-test-render-count]'
     ];
 
-    let turns = [];
     for (const sel of selectors) {
       const found = document.querySelectorAll(sel);
-      if (found.length > 0) {
-        turns = Array.from(found);
-        break;
-      }
+      if (found.length > 0) return Array.from(found);
     }
-
-    let text = "";
-
-    if (turns.length > 0) {
-      turns.forEach((t) => (text += t.innerText + "\n"));
-    }
-
-    if (text.trim().length === 0) {
-      const main =
-        document.querySelector('main [class*="conversation"]') ||
-        document.querySelector("main") ||
-        document.body;
-      if (main) text = main.innerText;
-      turns = [];
-    }
-
-    return { text, count: turns.length };
+    return [];
   }
 
   function getModelLimit() {
@@ -127,32 +118,63 @@
     if (!widget || !document.body.contains(widget)) {
       createWidget();
     }
-    const { text, count } = getConversationText();
-    const tokens = window.__aiTokenEstimator.estimateTokens(text);
-    const { limit } = getModelLimit();
-    const pct = Math.min(100, (tokens / limit) * 100);
 
-    usedEl.textContent = tokens.toLocaleString();
+    const messages = getVisibleMessages();
+
+    // Add any newly-seen messages to the running total.
+    // Each unique message (by content hash) is only counted once,
+    // so re-scrolling past it doesn't double-count, and scrolling
+    // away doesn't remove it from the total.
+    messages.forEach((el) => {
+      const text = el.innerText || "";
+      if (!text.trim()) return;
+      const key = hashText(text);
+      if (!seenMessageTokens.has(key)) {
+        const tokens = window.__aiTokenEstimator.estimateTokens(text);
+        seenMessageTokens.set(key, tokens);
+        runningTotal += tokens;
+      }
+    });
+
+    const { limit } = getModelLimit();
+    const pct = Math.min(100, (runningTotal / limit) * 100);
+
+    usedEl.textContent = runningTotal.toLocaleString();
     limitEl.textContent = limit.toLocaleString();
     pctEl.textContent = pct.toFixed(1) + "%";
-    msgCountEl.textContent = count > 0 ? `${count} messages` : "—";
+    msgCountEl.textContent = `${seenMessageTokens.size} messages seen`;
     fillEl.style.width = pct + "%";
 
     fillEl.classList.remove("warn", "danger");
     if (pct > 85) fillEl.classList.add("danger");
     else if (pct > 60) fillEl.classList.add("warn");
 
-    console.debug("[AI Token Meter] tokens:", tokens, "| chars:", text.length, "| turns:", count);
+    console.debug("[AI Token Meter] running total:", runningTotal, "| unique messages:", seenMessageTokens.size);
+  }
+
+  // Reset the running total when navigating to a different conversation
+  function resetIfNewConversation() {
+    const currentUrl = location.href;
+    if (window.__attLastUrl && window.__attLastUrl !== currentUrl) {
+      seenMessageTokens = new Map();
+      runningTotal = 0;
+    }
+    window.__attLastUrl = currentUrl;
   }
 
   createWidget();
+  resetIfNewConversation();
   updateUsage();
 
   const observer = new MutationObserver(() => {
+    resetIfNewConversation();
     clearTimeout(window.__attDebounce);
     window.__attDebounce = setTimeout(updateUsage, 600);
   });
   observer.observe(document.body, { childList: true, subtree: true });
 
-  setInterval(updateUsage, 5000);
+  setInterval(() => {
+    resetIfNewConversation();
+    updateUsage();
+  }, 5000);
 })();
